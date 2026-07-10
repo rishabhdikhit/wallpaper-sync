@@ -36,6 +36,16 @@ chmod +x "$APP_BUNDLE/Contents/MacOS/WallpaperMenu" \
 # Ad-hoc signing: needed so macOS lets the app run locally.
 codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
 
+# Deploy to /Applications so it shows up in Launchpad/Spotlight and updates in
+# place. (It's a menu-bar LSUIElement app, so it never gets a Dock icon.)
+# Falls back to ~/Applications if /Applications isn't writable.
+if [ -w /Applications ]; then DEST="/Applications"; else DEST="$HOME/Applications"; mkdir -p "$DEST"; fi
+if pgrep -x WallpaperMenu >/dev/null; then pkill -x WallpaperMenu 2>/dev/null || true; sleep 0.5; fi
+rm -rf "$DEST/MotionWall.app"
+cp -R "$APP_BUNDLE" "$DEST/MotionWall.app"
+codesign --force --deep --sign - "$DEST/MotionWall.app" 2>/dev/null || true
+echo "·· installed to $DEST/MotionWall.app"
+
 chmod +x "$ROOT/bin/wallpaper"
 
 if [ ! -f "$ROOT/config.json" ]; then
