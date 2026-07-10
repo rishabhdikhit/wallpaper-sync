@@ -24,6 +24,7 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS" \
 cp -f "$ROOT/app/WallpaperMenu"            "$APP_BUNDLE/Contents/MacOS/WallpaperMenu"
 cp -f "$ROOT/app/WallpaperEngine"          "$APP_BUNDLE/Contents/Resources/app/WallpaperEngine"
 cp -f "$ROOT/app/Info.plist"               "$APP_BUNDLE/Contents/Info.plist"
+[ -f "$ROOT/app/AppIcon.icns" ] && cp -f "$ROOT/app/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 cp -f "$ROOT/bin/wallpaper"                "$APP_BUNDLE/Contents/Resources/bin/wallpaper"
 cp -f "$ROOT/bin/_set_lockscreen_video.py" "$APP_BUNDLE/Contents/Resources/bin/_set_lockscreen_video.py"
 [ -f "$ROOT/bin/_mirror_lockscreen.py" ] && cp -f "$ROOT/bin/_mirror_lockscreen.py" "$APP_BUNDLE/Contents/Resources/bin/_mirror_lockscreen.py"
