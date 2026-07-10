@@ -366,7 +366,7 @@ class MainController: NSObject {
         searchField.sendsSearchStringImmediately = true
         searchField.sendsWholeSearchString = false
         let searchLeft: CGFloat = titleX + 30 + 150  // = 264
-        searchField.frame = NSRect(x: searchLeft, y: 16, width: max(180, cv.bounds.width - searchLeft - 310), height: 24)
+        searchField.frame = NSRect(x: searchLeft, y: 16, width: max(180, cv.bounds.width - searchLeft - 330), height: 24)
         searchField.autoresizingMask = [.width]
         header.addSubview(searchField)
 
@@ -377,14 +377,14 @@ class MainController: NSObject {
             psBolt.image = img.withSymbolConfiguration(cfg)
             psBolt.contentTintColor = Theme.textSec
         }
-        psBolt.frame = NSRect(x: cv.bounds.width - 290, y: 20, width: 14, height: 16)
+        psBolt.frame = NSRect(x: cv.bounds.width - 311, y: 20, width: 14, height: 16)
         psBolt.autoresizingMask = [.minXMargin]
         header.addSubview(psBolt)
 
         let psLabel = NSTextField(labelWithString: "Power Save")
         psLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         psLabel.textColor = Theme.textSec
-        psLabel.frame = NSRect(x: cv.bounds.width - 272, y: 20, width: 60, height: 16)
+        psLabel.frame = NSRect(x: cv.bounds.width - 293, y: 20, width: 82, height: 16)
         psLabel.autoresizingMask = [.minXMargin]
         header.addSubview(psLabel)
 
@@ -395,7 +395,7 @@ class MainController: NSObject {
         powerSaveBtn.title = ""
         powerSaveBtn.target = self
         powerSaveBtn.action = #selector(togglePowerSaveHUD)
-        powerSaveBtn.frame = NSRect(x: cv.bounds.width - 210, y: 20, width: 30, height: 16)
+        powerSaveBtn.frame = NSRect(x: cv.bounds.width - 205, y: 20, width: 32, height: 16)
         powerSaveBtn.autoresizingMask = [.minXMargin]
         header.addSubview(powerSaveBtn)
 
@@ -445,49 +445,40 @@ class MainController: NSObject {
         activeInfoLabel.font = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular)
         activeInfoLabel.textColor = Theme.textTer
         activeInfoLabel.alignment = .center
-        // Reserve ~80 px at the far right for the icons (Instagram + donate)
-        activeInfoLabel.frame = NSRect(x: 170, y: 10, width: cv.bounds.width - 250, height: 14)
+        // Reserve room at the far right for the note + more menu.
+        activeInfoLabel.frame = NSRect(x: 170, y: 10, width: cv.bounds.width - 440, height: 14)
         activeInfoLabel.autoresizingMask = [.width]
         bottomBar.addSubview(activeInfoLabel)
 
-        // Social / donation icons — far right of the bottom bar.
-        // Anchored to the right via .minXMargin so they stay fixed when the
-        // window grows.
-        let igBtn = IconButton()
-        igBtn.title = ""
-        igBtn.isBordered = false
-        igBtn.imagePosition = .imageOnly
-        if let img = NSImage(systemSymbolName: "at", accessibilityDescription: "Instagram") {
-            let cfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
-            igBtn.image = img.withSymbolConfiguration(cfg)
-        }
-        igBtn.contentTintColor = Theme.textSec
-        igBtn.idleTint = Theme.textSec
-        igBtn.hoverTint = NSColor(red: 0.91, green: 0.27, blue: 0.55, alpha: 1) // Instagram pink
-        igBtn.toolTip = "Instagram · @gonza._007"
-        igBtn.target = self
-        igBtn.action = #selector(openInstagram)
-        igBtn.frame = NSRect(x: cv.bounds.width - 56, y: 8, width: 22, height: 22)
-        igBtn.autoresizingMask = [.minXMargin]
-        bottomBar.addSubview(igBtn)
+        // Placeholder note — far right of the bottom bar. Anchored right via .minXMargin.
+        let comingSoon = NSTextField(labelWithString: "More functionality coming soon")
+        comingSoon.font = NSFont.systemFont(ofSize: 11, weight: .regular)
+        comingSoon.textColor = Theme.textTer
+        comingSoon.alignment = .right
+        comingSoon.lineBreakMode = .byTruncatingTail
+        comingSoon.frame = NSRect(x: cv.bounds.width - 240, y: 10, width: 200, height: 14)
+        comingSoon.autoresizingMask = [.minXMargin]
+        bottomBar.addSubview(comingSoon)
 
-        let donateBtn = IconButton()
-        donateBtn.title = ""
-        donateBtn.isBordered = false
-        donateBtn.imagePosition = .imageOnly
-        if let img = NSImage(systemSymbolName: "heart.fill", accessibilityDescription: "Donate") {
-            let cfg = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
-            donateBtn.image = img.withSymbolConfiguration(cfg)
+        // "More" menu — puts Uninstall/Quit inside the window so they're reachable
+        // without the menu-bar icon (which dies if you quit from the Dock).
+        let moreBtn = IconButton()
+        moreBtn.title = ""
+        moreBtn.isBordered = false
+        moreBtn.imagePosition = .imageOnly
+        if let img = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "More") {
+            let cfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+            moreBtn.image = img.withSymbolConfiguration(cfg)
         }
-        donateBtn.contentTintColor = Theme.textSec
-        donateBtn.idleTint = Theme.textSec
-        donateBtn.hoverTint = NSColor.systemPink
-        donateBtn.toolTip = "Buy me a coffee · ceneka.net/gonza_007"
-        donateBtn.target = self
-        donateBtn.action = #selector(openDonate)
-        donateBtn.frame = NSRect(x: cv.bounds.width - 28, y: 8, width: 22, height: 22)
-        donateBtn.autoresizingMask = [.minXMargin]
-        bottomBar.addSubview(donateBtn)
+        moreBtn.contentTintColor = Theme.textSec
+        moreBtn.idleTint = Theme.textSec
+        moreBtn.hoverTint = Theme.textPri
+        moreBtn.toolTip = "More — Uninstall, Quit"
+        moreBtn.target = self
+        moreBtn.action = #selector(showMoreMenu(_:))
+        moreBtn.frame = NSRect(x: cv.bounds.width - 30, y: 8, width: 22, height: 22)
+        moreBtn.autoresizingMask = [.minXMargin]
+        bottomBar.addSubview(moreBtn)
 
         // Scroll + Grid (between header and bottom)
         scrollView.frame = NSRect(x: 0, y: bottomH, width: cv.bounds.width, height: cv.bounds.height - headerH - bottomH)
@@ -832,12 +823,15 @@ class MainController: NSObject {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension")!)
     }
 
-    @objc func openInstagram() {
-        NSWorkspace.shared.open(URL(string: "https://instagram.com/gonza._007")!)
-    }
-
-    @objc func openDonate() {
-        NSWorkspace.shared.open(URL(string: "https://ceneka.net/gonza_007")!)
+    @objc func showMoreMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        let uninstall = NSMenuItem(title: "Uninstall Wallpaper Sync…",
+                                   action: #selector(AppDelegate.uninstallApp), keyEquivalent: "")
+        uninstall.target = NSApp.delegate
+        menu.addItem(uninstall)
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
     }
 
     private func useWallpaper(_ name: String) {
