@@ -2,6 +2,7 @@ import Cocoa
 import AVFoundation
 import QuartzCore
 import ServiceManagement
+import UniformTypeIdentifiers
 
 // MARK: - Design Tokens
 //
@@ -1061,21 +1062,35 @@ class MainController: NSObject {
     }
 
     @objc func importVideo() {
+        // Accessory (LSUIElement) apps must be activated first, otherwise the
+        // open panel can open behind the window and the click looks ignored.
+        NSApp.activate(ignoringOtherApps: true)
+
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [
-            .init(filenameExtension: "mp4")!, .init(filenameExtension: "mov")!,
-            .init(filenameExtension: "m4v")!, .init(filenameExtension: "gif")!,
-        ]
+        // Match the formats the CLI accepts. Build from extensions and drop any
+        // the system can't resolve rather than force-unwrapping (a nil crashes).
+        let types = ["mp4", "mov", "m4v", "gif", "webm"].compactMap { UTType(filenameExtension: $0) }
+        if !types.isEmpty { panel.allowedContentTypes = types }
         panel.allowsMultipleSelection = true
         panel.title = "Select videos to import"
         panel.prompt = "Import"
-        if panel.runModal() == .OK {
-            for url in panel.urls {
-                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+
+        let handle: ([URL]) -> Void = { [weak self] urls in
+            for url in urls {
+                DispatchQueue.global(qos: .userInitiated).async {
                     self?.runCommand("bin/wallpaper", args: ["set", url.path])
                     DispatchQueue.main.async { self?.reloadLibrary() }
                 }
             }
+        }
+
+        // Present as a sheet on the HUD so it's always frontmost and attached.
+        if window.isVisible {
+            panel.beginSheetModal(for: window) { resp in
+                if resp == .OK { handle(panel.urls) }
+            }
+        } else if panel.runModal() == .OK {
+            handle(panel.urls)
         }
     }
 
