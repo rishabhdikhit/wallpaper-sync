@@ -12,11 +12,13 @@ echo "·· compiling WallpaperEngine…"
 
 echo "·· compiling WallpaperMenu (HUD)…"
 /usr/bin/swiftc -O -whole-module-optimization \
-  -framework Cocoa -framework AVFoundation -framework QuartzCore \
+  -framework Cocoa -framework AVFoundation -framework QuartzCore -framework ServiceManagement \
   -o "$ROOT/app/WallpaperMenu" "$ROOT/app/MenuApp.swift"
 
 # ── Assemble the .app (created from scratch if it doesn't exist) ───────
-APP_BUNDLE="$ROOT/Wallpaper Sync.app"
+# Remove the pre-rename bundle so we don't leave a stale "Wallpaper Sync.app".
+rm -rf "$ROOT/Wallpaper Sync.app"
+APP_BUNDLE="$ROOT/MotionWall.app"
 echo "·· assembling ${APP_BUNDLE}…"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" \
          "$APP_BUNDLE/Contents/Resources/app" \

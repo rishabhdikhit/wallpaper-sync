@@ -1,6 +1,7 @@
 import Cocoa
 import AVFoundation
 import QuartzCore
+import ServiceManagement
 
 // MARK: - Design Tokens
 //
@@ -287,9 +288,16 @@ class MainController: NSObject {
     private let statusIcon = NSImageView()
     private let statusLabel = NSTextField(labelWithString: "")
     private let activeInfoLabel = NSTextField(labelWithString: "")
-    private let powerSaveBtn = NSButton()
+    private let powerSaveBtn = NSSwitch()
     private let searchField = NSSearchField()
     private var allCards: [WallpaperCard] = []
+
+    // Settings popover (Liquid Glass) — controls created once, reused each open.
+    private var settingsPopover: NSPopover?
+    private let loginSwitch = NSSwitch()
+    private let engineSwitch = NSSwitch()
+    private let batterySwitch = NSSwitch()
+    private let settingsStatusLabel = NSTextField(labelWithString: "")
 
     override init() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 880, height: 620),
@@ -297,7 +305,7 @@ class MainController: NSObject {
                           backing: .buffered, defer: false)
         super.init()
 
-        window.title = "Wallpaper Sync"
+        window.title = "MotionWall"
         // Min width 760 leaves room for traffic lights + title + search +
         // right-side controls without overlap. Below that we hide the search
         // field dynamically.
@@ -343,7 +351,7 @@ class MainController: NSObject {
         // [icon · "Library"]; the search occupies the flexible center.
         let titleX: CGFloat = 84
         let titleIcon = NSImageView()
-        if let img = NSImage(systemSymbolName: "play.rectangle.fill", accessibilityDescription: nil) {
+        if let img = NSImage(systemSymbolName: "play.square.stack.fill", accessibilityDescription: nil) {
             let cfg = NSImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
             titleIcon.image = img.withSymbolConfiguration(cfg)
             titleIcon.contentTintColor = Theme.accent
@@ -370,34 +378,25 @@ class MainController: NSObject {
         searchField.autoresizingMask = [.width]
         header.addSubview(searchField)
 
-        // Power save — native switch with bolt icon
-        let psBolt = NSImageView()
-        if let img = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: nil) {
-            let cfg = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
-            psBolt.image = img.withSymbolConfiguration(cfg)
-            psBolt.contentTintColor = Theme.textSec
+        // Settings — gear opens the Liquid Glass settings popover that hosts
+        // every control (login, engine, battery, power save, restore, uninstall).
+        let gearBtn = IconButton()
+        gearBtn.title = ""
+        gearBtn.isBordered = false
+        gearBtn.imagePosition = .imageOnly
+        if let img = NSImage(systemSymbolName: "gearshape.fill", accessibilityDescription: "Settings") {
+            let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+            gearBtn.image = img.withSymbolConfiguration(cfg)
         }
-        psBolt.frame = NSRect(x: cv.bounds.width - 311, y: 20, width: 14, height: 16)
-        psBolt.autoresizingMask = [.minXMargin]
-        header.addSubview(psBolt)
-
-        let psLabel = NSTextField(labelWithString: "Power Save")
-        psLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        psLabel.textColor = Theme.textSec
-        psLabel.frame = NSRect(x: cv.bounds.width - 293, y: 20, width: 82, height: 16)
-        psLabel.autoresizingMask = [.minXMargin]
-        header.addSubview(psLabel)
-
-        powerSaveBtn.setButtonType(.switch)
-        if #available(macOS 10.15, *) {
-            powerSaveBtn.controlSize = .small
-        }
-        powerSaveBtn.title = ""
-        powerSaveBtn.target = self
-        powerSaveBtn.action = #selector(togglePowerSaveHUD)
-        powerSaveBtn.frame = NSRect(x: cv.bounds.width - 205, y: 20, width: 32, height: 16)
-        powerSaveBtn.autoresizingMask = [.minXMargin]
-        header.addSubview(powerSaveBtn)
+        gearBtn.idleTint = Theme.textSec
+        gearBtn.hoverTint = Theme.textPri
+        gearBtn.contentTintColor = Theme.textSec
+        gearBtn.toolTip = "Settings"
+        gearBtn.target = self
+        gearBtn.action = #selector(showSettingsPopover(_:))
+        gearBtn.frame = NSRect(x: cv.bounds.width - 170, y: 15, width: 28, height: 26)
+        gearBtn.autoresizingMask = [.minXMargin]
+        header.addSubview(gearBtn)
 
         // Import button — HIG-compliant borderedProminent style
         let importBtn = NSButton(title: "  Import", target: self, action: #selector(importVideo))
@@ -451,7 +450,7 @@ class MainController: NSObject {
         bottomBar.addSubview(activeInfoLabel)
 
         // Placeholder note — far right of the bottom bar. Anchored right via .minXMargin.
-        let comingSoon = NSTextField(labelWithString: "More functionality coming soon")
+        let comingSoon = NSTextField(labelWithString: "MotionWall")
         comingSoon.font = NSFont.systemFont(ofSize: 11, weight: .regular)
         comingSoon.textColor = Theme.textTer
         comingSoon.alignment = .right
@@ -823,9 +822,204 @@ class MainController: NSObject {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension")!)
     }
 
+    // MARK: - Settings popover (Liquid Glass)
+
+    @objc func showSettingsPopover(_ sender: NSButton) {
+        let pop = settingsPopover ?? buildSettingsPopover()
+        settingsPopover = pop
+        if pop.isShown { pop.performClose(sender); return }
+        refreshSettingsStates()
+        pop.show(relativeTo: sender.bounds, of: sender, preferredEdge: .maxY)
+    }
+
+    private let settingsW: CGFloat = 320
+    private let settingsH: CGFloat = 410
+
+    private func buildSettingsPopover() -> NSPopover {
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: settingsW, height: settingsH))
+        content.autoresizingMask = [.width, .height]
+        let innerX: CGFloat = 16
+        let innerW = settingsW - innerX * 2
+
+        // Lay out top-down. fromTop(offset,h) converts a top-anchored offset to
+        // an AppKit (bottom-left origin) y, matching the manual-frame style used
+        // throughout this file.
+        func fromTop(_ top: CGFloat, _ h: CGFloat) -> CGFloat { settingsH - top - h }
+
+        content.addSubview(makeSectionHeader("STARTUP", frame: NSRect(x: innerX, y: fromTop(16, 16), width: innerW, height: 16)))
+        content.addSubview(makeSwitchRow("Launch at login", "Open MotionWall automatically",
+            control: loginSwitch, action: #selector(toggleLoginItem),
+            frame: NSRect(x: innerX, y: fromTop(38, 42), width: innerW, height: 42)))
+
+        content.addSubview(makeSectionHeader("ENGINE", frame: NSRect(x: innerX, y: fromTop(90, 16), width: innerW, height: 16)))
+        content.addSubview(makeSwitchRow("Wallpaper engine", "Play the animated wallpaper",
+            control: engineSwitch, action: #selector(toggleEngine),
+            frame: NSRect(x: innerX, y: fromTop(112, 42), width: innerW, height: 42)))
+
+        content.addSubview(makeSectionHeader("POWER", frame: NSRect(x: innerX, y: fromTop(164, 16), width: innerW, height: 16)))
+        content.addSubview(makeSwitchRow("Pause on battery", "Stop when unplugged",
+            control: batterySwitch, action: #selector(toggleBattery),
+            frame: NSRect(x: innerX, y: fromTop(186, 42), width: innerW, height: 42)))
+        content.addSubview(makeSwitchRow("Power save", "Show a static frame",
+            control: powerSaveBtn, action: #selector(togglePowerSaveHUD),
+            frame: NSRect(x: innerX, y: fromTop(232, 42), width: innerW, height: 42)))
+
+        content.addSubview(makeActionButton("Restore lock screen", symbol: "arrow.uturn.backward",
+            destructive: false, action: #selector(restoreLockScreenFromSettings),
+            frame: NSRect(x: innerX, y: fromTop(286, 32), width: innerW, height: 32)))
+        content.addSubview(makeActionButton("Uninstall MotionWall…", symbol: "trash",
+            destructive: true, action: #selector(uninstallFromSettings),
+            frame: NSRect(x: innerX, y: fromTop(326, 32), width: innerW, height: 32)))
+
+        settingsStatusLabel.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+        settingsStatusLabel.textColor = Theme.textTer
+        settingsStatusLabel.lineBreakMode = .byTruncatingTail
+        settingsStatusLabel.maximumNumberOfLines = 2
+        settingsStatusLabel.frame = NSRect(x: innerX, y: fromTop(368, 28), width: innerW, height: 28)
+        content.addSubview(settingsStatusLabel)
+
+        let vc = NSViewController()
+        // Genuine Liquid Glass backing (macOS 26+); graceful on older systems.
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView(frame: content.bounds)
+            glass.cornerRadius = 20
+            glass.contentView = content
+            vc.view = glass
+        } else {
+            vc.view = content
+        }
+
+        let pop = NSPopover()
+        pop.contentViewController = vc
+        pop.contentSize = NSSize(width: settingsW, height: settingsH)
+        pop.behavior = .transient
+        pop.animates = true
+        return pop
+    }
+
+    private func makeSectionHeader(_ text: String, frame: NSRect) -> NSView {
+        let l = NSTextField(labelWithString: text)
+        l.font = NSFont.systemFont(ofSize: 10.5, weight: .semibold)
+        l.textColor = Theme.textTer
+        l.frame = frame
+        return l
+    }
+
+    private func makeSwitchRow(_ title: String, _ subtitle: String, control: NSSwitch, action: Selector, frame: NSRect) -> NSView {
+        let row = NSView(frame: frame)
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        titleLabel.textColor = Theme.textPri
+        titleLabel.frame = NSRect(x: 0, y: 21, width: frame.width - 54, height: 17)
+        row.addSubview(titleLabel)
+
+        let subLabel = NSTextField(labelWithString: subtitle)
+        subLabel.font = NSFont.systemFont(ofSize: 11, weight: .regular)
+        subLabel.textColor = Theme.textSec
+        subLabel.frame = NSRect(x: 0, y: 4, width: frame.width - 54, height: 15)
+        row.addSubview(subLabel)
+
+        control.target = self
+        control.action = action
+        control.frame = NSRect(x: frame.width - 42, y: (frame.height - 22) / 2, width: 40, height: 22)
+        row.addSubview(control)
+        return row
+    }
+
+    private func makeActionButton(_ title: String, symbol: String, destructive: Bool, action: Selector, frame: NSRect) -> NSView {
+        let btn = NSButton(title: "  " + title, target: self, action: action)
+        btn.bezelStyle = .rounded
+        btn.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        btn.frame = frame
+        if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
+            btn.image = img
+            btn.imagePosition = .imageLeading
+        }
+        if destructive {
+            btn.contentTintColor = NSColor.systemRed
+        }
+        return btn
+    }
+
+    private func refreshSettingsStates() {
+        // Config-backed toggles
+        let cfgPath = appSupportURL.appendingPathComponent("config.json").path
+        var battery = false, powerSave = false
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: cfgPath)),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            battery = (json["pauseOnBattery"] as? Bool) ?? false
+            powerSave = (json["powerSavingMode"] as? Bool) ?? false
+        }
+        batterySwitch.state = battery ? .on : .off
+        powerSaveBtn.state = powerSave ? .on : .off
+
+        // Engine running?
+        let running = engineIsRunning()
+        engineSwitch.state = running ? .on : .off
+
+        // Login item
+        if #available(macOS 13.0, *) {
+            loginSwitch.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
+        }
+
+        settingsStatusLabel.stringValue = running
+            ? "Engine running\(activeName.isEmpty ? "" : " · ▶ \(activeName)")"
+            : "Engine stopped"
+    }
+
+    private func engineIsRunning() -> Bool {
+        (try? String(contentsOfFile: appSupportURL.appendingPathComponent("logs/engine.pid").path))
+            .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .map { kill(Int32($0), 0) == 0 } ?? false
+    }
+
+    @objc func toggleLoginItem() {
+        guard #available(macOS 13.0, *) else { return }
+        do {
+            if loginSwitch.state == .on { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+        } catch {
+            NSSound.beep()
+            let a = NSAlert()
+            a.messageText = "Couldn't update login item"
+            a.informativeText = error.localizedDescription
+            a.runModal()
+        }
+        refreshSettingsStates()
+    }
+
+    @objc func toggleEngine() {
+        let on = (engineSwitch.state == .on)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.runCommand("bin/wallpaper", args: [on ? "start" : "stop"])
+            DispatchQueue.main.async {
+                self?.reloadLibrary()
+                self?.refreshSettingsStates()
+            }
+        }
+    }
+
+    @objc func toggleBattery() {
+        let on = (batterySwitch.state == .on)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.runCommand("bin/wallpaper", args: ["battery", on ? "on" : "off"])
+        }
+    }
+
+    @objc func restoreLockScreenFromSettings() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.runCommand("bin/wallpaper", args: ["lockscreen-restore"])
+        }
+    }
+
+    @objc func uninstallFromSettings() {
+        settingsPopover?.performClose(nil)
+        (NSApp.delegate as? AppDelegate)?.uninstallApp()
+    }
+
     @objc func showMoreMenu(_ sender: NSButton) {
         let menu = NSMenu()
-        let uninstall = NSMenuItem(title: "Uninstall Wallpaper Sync…",
+        let uninstall = NSMenuItem(title: "Uninstall MotionWall…",
                                    action: #selector(AppDelegate.uninstallApp), keyEquivalent: "")
         uninstall.target = NSApp.delegate
         menu.addItem(uninstall)
@@ -911,7 +1105,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let btn = statusItem.button {
             if #available(macOS 11.0, *),
-               let img = NSImage(systemSymbolName: "play.rectangle.fill", accessibilityDescription: "Wallpaper Sync") {
+               let img = NSImage(systemSymbolName: "play.square.stack.fill", accessibilityDescription: "MotionWall") {
                 let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
                 let configured = img.withSymbolConfiguration(cfg) ?? img
                 configured.isTemplate = true
@@ -1077,7 +1271,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
-        alert.messageText = "Uninstall Wallpaper Sync?"
+        alert.messageText = "Uninstall MotionWall?"
         alert.informativeText = """
         This will:
           1. Stop the wallpaper engine
@@ -1126,6 +1320,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func hideWindow() {
         mainController.window.orderOut(nil)
         NSApp.setActivationPolicy(.accessory)  // Hide from dock
+    }
+
+    // Quitting the menu app must also stop the detached WallpaperEngine —
+    // otherwise the overlay keeps rendering and the wallpaper stays on screen.
+    // runCommand is synchronous (waitUntilExit); stop is fast (SIGTERM).
+    func applicationWillTerminate(_ n: Notification) {
+        mainController.runCommand("bin/wallpaper", args: ["stop"])
     }
 
     // When user clicks the red X, hide to menu bar instead of quitting

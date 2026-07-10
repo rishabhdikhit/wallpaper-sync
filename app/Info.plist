@@ -7,9 +7,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.wallpapersync.app</string>
     <key>CFBundleName</key>
-    <string>Wallpaper Sync</string>
+    <string>MotionWall</string>
     <key>CFBundleDisplayName</key>
-    <string>Wallpaper Sync</string>
+    <string>MotionWall</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
