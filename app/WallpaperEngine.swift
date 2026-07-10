@@ -30,6 +30,7 @@ final class WallpaperEngine: NSObject {
     private let configPath: String
     private var isPaused = false
     private var windowVisible: [Bool] = []   // per-window: is the wallpaper actually on screen?
+    private var occlusionWork: [DispatchWorkItem?] = []  // per-window debounce for occlusion flapping
     private var configSource: DispatchSourceFileSystemObject?
     private var configFD: Int32 = -1
     private var configFallbackTimer: Timer?
@@ -281,6 +282,8 @@ final class WallpaperEngine: NSObject {
         }
         // Freshly ordered-front windows start visible; occlusion notifications correct this.
         windowVisible = Array(repeating: true, count: windows.count)
+        occlusionWork.forEach { $0?.cancel() }
+        occlusionWork = Array(repeating: nil, count: windows.count)
     }
 
     // MARK: - Lifecycle
@@ -380,11 +383,20 @@ final class WallpaperEngine: NSObject {
     @objc private func occlusionChanged(_ note: Notification) {
         guard let win = note.object as? NSWindow,
               let idx = windows.firstIndex(where: { $0 === win }) else { return }
-        let visible = win.occlusionState.contains(.visible)
-        if idx < windowVisible.count { windowVisible[idx] = visible }
-        log("occlusion: window[\(idx)] visible=\(visible)")
-        // Play only if power policy allows AND this display's wallpaper is actually visible.
-        if !isPaused && visible { players[idx].play() } else { players[idx].pause() }
+        // occlusionState can flap rapidly during window/Space transitions. Debounce:
+        // only act once it's held steady ~0.4s, so we don't thrash the player.
+        guard idx < occlusionWork.count else { return }
+        occlusionWork[idx]?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, idx < self.windows.count, idx < self.windowVisible.count else { return }
+            let visible = self.windows[idx].occlusionState.contains(.visible)
+            guard self.windowVisible[idx] != visible else { return }  // settled change only
+            self.windowVisible[idx] = visible
+            log("occlusion: window[\(idx)] visible=\(visible)")
+            if !self.isPaused && visible { self.players[idx].play() } else { self.players[idx].pause() }
+        }
+        occlusionWork[idx] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
     /// Single source of truth: a player runs iff power policy allows and its window is visible.
