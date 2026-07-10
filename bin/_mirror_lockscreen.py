@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# Espeja la config de Desktop sobre Idle (lock screen) en el Index.plist
-# del WallpaperAgent de macOS. Uso:
-#   _mirror_lockscreen.py            # espeja y reinicia WallpaperAgent
-#   _mirror_lockscreen.py --dry-run  # sólo informa
+# Mirrors the Desktop config onto Idle (lock screen) in the Index.plist
+# of the macOS WallpaperAgent. Usage:
+#   _mirror_lockscreen.py            # mirrors and restarts WallpaperAgent
+#   _mirror_lockscreen.py --dry-run  # only reports
 import plistlib, copy, datetime, os, sys, tempfile, subprocess
 
 INDEX = os.path.expanduser("~/Library/Application Support/com.apple.wallpaper/Store/Index.plist")
@@ -25,7 +25,7 @@ def mirror(node, touched):
 def main():
     dry = "--dry-run" in sys.argv
     if not os.path.exists(INDEX):
-        print("no existe el Index.plist del WallpaperAgent", file=sys.stderr); sys.exit(1)
+        print("the WallpaperAgent Index.plist does not exist", file=sys.stderr); sys.exit(1)
 
     with open(INDEX, "rb") as f:
         d = plistlib.load(f)
@@ -49,11 +49,11 @@ def main():
         asd["Idle"]["LastUse"] = now
         touched += 1
 
-    print(f"nodos a espejar: {touched}")
+    print(f"nodes to mirror: {touched}")
     if dry or touched == 0:
         return
 
-    # write atómico: tmp → rename
+    # atomic write: tmp → rename
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(INDEX), prefix=".Index.plist.tmp-")
     try:
         with os.fdopen(fd, "wb") as f:
@@ -64,7 +64,7 @@ def main():
         except: pass
         raise
 
-    # reiniciar WallpaperAgent (se relanza solo vía launchd)
+    # restart WallpaperAgent (it relaunches itself via launchd)
     subprocess.run(["killall", "WallpaperAgent"], stderr=subprocess.DEVNULL)
 
 if __name__ == "__main__":
