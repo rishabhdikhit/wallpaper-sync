@@ -1,0 +1,432 @@
+#!/usr/bin/env bash
+# wallpaper — animated wallpaper engine for macOS.
+# All videos are stored in HEVC (.mov) format for maximum compatibility.
+set -euo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# ── Paths ──────────────────────────────────────────────────────────────
+# BUNDLE_ROOT = where the executables live (inside the .app or in the repo)
+if [ -n "${APP_BUNDLE_RESOURCES:-}" ]; then
+  BUNDLE_ROOT="$APP_BUNDLE_RESOURCES"
+else
+  BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
+
+# ROOT = user data (writable)
+ROOT="$HOME/Library/Application Support/WallpaperSync"
+mkdir -p "$ROOT/library" "$ROOT/logs"
+
+APP="$BUNDLE_ROOT/app/WallpaperEngine"
+CFG="$ROOT/config.json"
+LIB="$ROOT/library"
+LOG="$ROOT/logs/engine.log"
+PID="$ROOT/logs/engine.pid"
+AGENT_LABEL="local.wallpaper.engine"
+AGENT_PLIST="$HOME/Library/LaunchAgents/${AGENT_LABEL}.plist"
+
+FFMPEG="$(command -v ffmpeg || true)"
+
+die() { echo "error: $*" >&2; exit 1; }
+info() { echo "·· $*"; }
+
+# ── Config helpers ─────────────────────────────────────────────────────
+ensure_cfg() {
+  if [ ! -f "$CFG" ]; then
+    cat > "$CFG" <<JSON
+{
+  "video": "",
+  "fill": "fill",
+  "pauseOnBattery": false,
+  "pauseOnLowPower": false,
+  "powerSavingMode": false,
+  "activeName": ""
+}
+JSON
+  fi
+}
+
+cfg_get() {
+  /usr/bin/python3 - "$CFG" "$1" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1])).get(sys.argv[2],"")
+if isinstance(v,bool): print("true" if v else "false")
+else: print(v)
+PY
+}
+
+cfg_set() {
+  local key="$1" val="$2"
+  /usr/bin/python3 - "$CFG" "$key" "$val" <<'PY'
+import json,sys
+p,k,v=sys.argv[1],sys.argv[2],sys.argv[3]
+d=json.load(open(p))
+if v in ("true","false"): d[k] = (v=="true")
+else: d[k] = v
+open(p,"w").write(json.dumps(d,indent=2))
+PY
+}
+
+# ── HEVC conversion ────────────────────────────────────────────────────
+# Done ONCE when adding a video. After that, it's all just copying files.
+convert_to_hevc_mov() {
+  local src="$1" dst="$2"
+  [ -n "$FFMPEG" ] || die "ffmpeg is not installed (brew install ffmpeg)"
+
+  # If it's already HEVC, just repackage as .mov
+  local codec
+  codec=$("$FFMPEG" -i "$src" -hide_banner 2>&1 | grep -o 'hevc\|h265' | head -1 || true)
+  if [ -n "$codec" ]; then
+    info "already HEVC, repackaging to .mov…"
+    "$FFMPEG" -hide_banner -loglevel error -y -i "$src" \
+      -c copy -tag:v hvc1 -movflags +faststart -an -f mov "$dst"
+    return 0
+  fi
+
+  info "encoding to HEVC (hardware)…"
+  local vf='scale=trunc(iw/2)*2:trunc(ih/2)*2'
+  if "$FFMPEG" -hide_banner -loglevel error -y -i "$src" \
+      -c:v hevc_videotoolbox -tag:v hvc1 -q:v 55 -pix_fmt yuv420p \
+      -vf "$vf" -movflags +faststart -an -f mov "$dst" 2>/dev/null; then
+    info "✓ encoded with HEVC VideoToolbox"
+    return 0
+  fi
+
+  info "fallback: x265 software…"
+  "$FFMPEG" -hide_banner -loglevel error -y -i "$src" \
+    -c:v libx265 -tag:v hvc1 -preset fast -crf 26 -pix_fmt yuv420p \
+    -vf "$vf" -movflags +faststart -an -f mov "$dst"
+}
+
+# ── Sync lock screen ──────────────────────────────────────────────────
+# The video is ALREADY HEVC, we just copy it atomically into the aerial slot.
+sync_lockscreen() {
+  local video="$1"
+  [ -f "$video" ] || return 0
+  info "syncing lock screen…"
+  /usr/bin/python3 "$BUNDLE_ROOT/bin/_set_lockscreen_video.py" "$video" 2>&1 || true
+}
+
+# ── Engine control ────────────────────────────────────────────────────
+is_running() {
+  [ -f "$PID" ] || return 1
+  local p; p="$(cat "$PID" 2>/dev/null)"
+  [ -n "$p" ] || return 1
+  kill -0 "$p" 2>/dev/null || { rm -f "$PID"; return 1; }
+  # Verify the PID corresponds to WallpaperEngine and not to a process
+  # that reused that PID after the engine died.
+  ps -p "$p" -o comm= 2>/dev/null | grep -q "WallpaperEngine$" || { rm -f "$PID"; return 1; }
+}
+
+cmd_start() {
+  ensure_cfg
+  [ -x "$APP" ] || die "binary not found: $APP"
+  local vid; vid="$(cfg_get video)"
+  [ -n "$vid" ] || die "no active wallpaper. Use: wallpaper use <name>"
+  if is_running; then info "already running (pid $(cat "$PID"))"; return 0; fi
+  nohup "$APP" "$CFG" >>"$LOG" 2>&1 &
+  echo $! > "$PID"
+  sleep 0.3
+  is_running || die "failed to start (see $LOG)"
+  info "started (pid $(cat "$PID"))"
+
+  # Resync the lock screen slot to the current video. Without this, after a
+  # reboot the system keeps showing the last video that was synced manually
+  # (with `wallpaper use` or `set`), not the active one.
+  sync_lockscreen "$vid"
+}
+
+cmd_stop() {
+  local killed=0
+  if is_running; then
+    local p; p="$(cat "$PID")"
+    kill "$p" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      kill -0 "$p" 2>/dev/null || { killed=1; break; }
+      sleep 0.2
+    done
+    [ $killed -eq 1 ] || kill -9 "$p" 2>/dev/null || true
+    rm -f "$PID"
+  fi
+  pkill -9 -f "WallpaperEngine" 2>/dev/null || true
+  info "stopped"
+}
+
+cmd_restart() { cmd_stop; cmd_start; }
+
+# ── Library ───────────────────────────────────────────────────────────
+cmd_add() {
+  local src="${1:-}"; [ -n "$src" ] || die "usage: wallpaper add <file>"
+  [ -f "$src" ] || die "does not exist: $src"
+  local base; base="$(basename "$src")"
+  local stem="${base%.*}"
+  local dst="$LIB/${stem}.mov"
+
+  case "$src" in
+    *.mov|*.MOV)
+      # Check if it's already HEVC
+      local codec
+      codec=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$src" 2>/dev/null || true)
+      if [ "$codec" = "hevc" ]; then
+        info "already HEVC .mov, copying directly…"
+        cp -f "$src" "$dst"
+      else
+        convert_to_hevc_mov "$src" "$dst"
+      fi
+      ;;
+    *.mp4|*.MP4|*.m4v|*.M4V)
+      convert_to_hevc_mov "$src" "$dst"
+      ;;
+    *.gif|*.GIF|*.webm|*.WEBM)
+      convert_to_hevc_mov "$src" "$dst"
+      ;;
+    *) die "unsupported format: $base" ;;
+  esac
+  info "added: $stem"
+}
+
+cmd_use() {
+  ensure_cfg
+  local name="${1:-}"; [ -n "$name" ] || die "usage: wallpaper use <name>"
+
+  # Find the .mov in the library
+  local match=""
+  for f in "$LIB/${name}.mov"; do
+    [ -f "$f" ] && { match="$f"; break; }
+  done
+  [ -n "$match" ] || die "not in the library: $name (see 'wallpaper list')"
+
+  # Update config — the engine detects it automatically via checkConfig
+  cfg_set video "$match"
+  cfg_set activeName "$name"
+
+  # Sync lock screen (atomic copy, already HEVC)
+  sync_lockscreen "$match"
+
+  info "active wallpaper: $name"
+
+  # If the engine isn't running, start it
+  if ! is_running; then
+    cmd_start
+  fi
+}
+
+cmd_set() {
+  local src="${1:-}"; [ -n "$src" ] || die "usage: wallpaper set <file>"
+  [ -f "$src" ] || die "does not exist: $src"
+  local base; base="$(basename "$src")"
+  local stem="${base%.*}"
+
+  # Add to the library (converts to HEVC if needed)
+  cmd_add "$src"
+
+  # Activate
+  cmd_use "$stem"
+}
+
+cmd_list() {
+  [ -d "$LIB" ] || { echo "(library empty)"; return 0; }
+  ensure_cfg
+  local active_name; active_name="$(cfg_get activeName)"
+  shopt -s nullglob nocaseglob
+  local any=0
+  for f in "$LIB"/*.mov; do
+    any=1
+    local base; base="$(basename "$f")"
+    local stem="${base%.*}"
+    local size; size="$(du -h "$f" | cut -f1 | xargs)"
+    local mark="  "
+    [ "$stem" = "$active_name" ] && mark="▶ "
+    echo "${mark}${stem}    [${size}]"
+  done
+  [ $any -eq 1 ] || echo "(library empty — use 'wallpaper set <file>' to add)"
+}
+
+cmd_remove() {
+  local name="${1:-}"; [ -n "$name" ] || die "usage: wallpaper remove <name>"
+  local src="$LIB/${name}.mov"
+  [ -f "$src" ] || die "does not exist: $name"
+  rm -f "$src"
+  info "removed: $name"
+}
+
+cmd_status() {
+  ensure_cfg
+  echo "video:           $(cfg_get video)"
+  echo "fill:            $(cfg_get fill)"
+  echo "pauseOnBattery:  $(cfg_get pauseOnBattery)"
+  echo "pauseOnLowPower: $(cfg_get pauseOnLowPower)"
+  echo "powerSavingMode: $(cfg_get powerSavingMode)"
+  echo "activeName:      $(cfg_get activeName)"
+  if is_running; then
+    echo "status:          RUNNING (pid $(cat "$PID"))"
+  else
+    echo "status:          stopped"
+  fi
+  [ -f "$AGENT_PLIST" ] && echo "autostart:       yes" || echo "autostart:       no"
+}
+
+cmd_fill() {
+  local m="${1:-}"
+  case "$m" in
+    fill|fit|stretch) cfg_set fill "$m"; info "fill=$m"; is_running && cmd_restart || true ;;
+    *) die "usage: wallpaper fill <fill|fit|stretch>" ;;
+  esac
+}
+
+cmd_battery() {
+  case "${1:-}" in
+    on) cfg_set pauseOnBattery true; info "pause on battery: on" ;;
+    off) cfg_set pauseOnBattery false; info "pause on battery: off" ;;
+    *) die "usage: wallpaper battery <on|off>" ;;
+  esac
+  is_running && cmd_restart || true
+}
+
+cmd_lowpower() {
+  case "${1:-}" in
+    on) cfg_set pauseOnLowPower true; info "pause on low-power: on" ;;
+    off) cfg_set pauseOnLowPower false; info "pause on low-power: off" ;;
+    *) die "usage: wallpaper lowpower <on|off>" ;;
+  esac
+  is_running && cmd_restart || true
+}
+
+cmd_powersave() {
+  case "${1:-}" in
+    on) cfg_set powerSavingMode true; info "power save (static frame): on" ;;
+    off) cfg_set powerSavingMode false; info "power save (static frame): off" ;;
+    *) die "usage: wallpaper powersave <on|off>" ;;
+  esac
+  # The engine listens to this config change dynamically, no need to restart
+}
+
+# ── Autostart ─────────────────────────────────────────────────────────
+write_agent() {
+  mkdir -p "$(dirname "$AGENT_PLIST")"
+  cat > "$AGENT_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${AGENT_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${APP}</string>
+    <string>${CFG}</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key>
+  <dict><key>SuccessfulExit</key><false/></dict>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+  <key>Nice</key><integer>5</integer>
+  <key>StandardOutPath</key><string>${LOG}</string>
+  <key>StandardErrorPath</key><string>${LOG}</string>
+</dict>
+</plist>
+PLIST
+}
+
+cmd_enable() {
+  [ -x "$APP" ] || die "binary not found: $APP"
+  cmd_stop || true
+  write_agent
+  launchctl unload "$AGENT_PLIST" 2>/dev/null || true
+  launchctl load "$AGENT_PLIST"
+  info "autostart installed"
+}
+
+cmd_disable() {
+  if [ -f "$AGENT_PLIST" ]; then
+    launchctl unload "$AGENT_PLIST" 2>/dev/null || true
+    rm -f "$AGENT_PLIST"
+    info "autostart uninstalled"
+  else
+    info "autostart was not installed"
+  fi
+}
+
+cmd_uninstall() {
+  info "stopping engine…"
+  cmd_stop || true
+  info "restoring original lock screen…"
+  /usr/bin/python3 "$BUNDLE_ROOT/bin/_set_lockscreen_video.py" --restore 2>/dev/null || true
+  info "removing autostart…"
+  cmd_disable || true
+  info "deleting app data ($ROOT)…"
+  rm -rf "$ROOT"
+  info "done — data and autostart removed. You can now move the app to the Trash."
+}
+
+cmd_logs() { tail -n "${1:-80}" "$LOG" 2>/dev/null || echo "(no logs)"; }
+
+cmd_lockscreen() {
+  local vid; vid="$(cfg_get video)"
+  [ -n "$vid" ] && [ -f "$vid" ] || die "no active wallpaper"
+  /usr/bin/python3 "$BUNDLE_ROOT/bin/_set_lockscreen_video.py" "$vid"
+}
+
+cmd_test() {
+  ensure_cfg
+  [ -x "$APP" ] || die "binary not found: $APP"
+  local vid; vid="$(cfg_get video)"
+  [ -n "$vid" ] || die "no active wallpaper"
+  cmd_stop || true
+  info "sanity-check: small 320x180 window, closes itself in 8s"
+  "$APP" "$CFG" --sanity 2>&1 | tee -a "$LOG"
+}
+
+# ── Dispatch ──────────────────────────────────────────────────────────
+usage() {
+  cat <<EOF
+wallpaper — animated wallpaper engine for macOS
+
+USAGE:
+  wallpaper set <file>          Convert to HEVC and set as wallpaper
+  wallpaper use <name>          Activate a wallpaper from the library (instant)
+  wallpaper add <file>          Add to the library without activating
+  wallpaper list                List the library (▶ = active)
+  wallpaper remove <name>       Remove from the library
+  wallpaper start | stop | restart
+  wallpaper status              Show status and configuration
+  wallpaper logs [N]            Last N lines of log
+  wallpaper test                Visual sanity-check
+  wallpaper lockscreen          Sync lock screen manually
+  wallpaper lockscreen-restore  Restore the original aerial
+  wallpaper lockscreen-status   Show lock screen status
+  wallpaper fill <fill|fit|stretch>
+  wallpaper battery <on|off>
+  wallpaper lowpower <on|off>
+  wallpaper powersave <on|off>  Show a static frame to save power
+  wallpaper enable              Autostart at login
+  wallpaper disable             Remove autostart
+  wallpaper uninstall           Stop everything, restore the lock screen and delete data
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  set)       cmd_set "$@" ;;
+  use)       cmd_use "$@" ;;
+  add)       cmd_add "$@" ;;
+  list|ls)   cmd_list ;;
+  remove|rm) cmd_remove "$@" ;;
+  start)     cmd_start ;;
+  stop)      cmd_stop ;;
+  restart)   cmd_restart ;;
+  status)    cmd_status ;;
+  logs)      cmd_logs "$@" ;;
+  test)      cmd_test ;;
+  lockscreen|lock) cmd_lockscreen ;;
+  lockscreen-restore) /usr/bin/python3 "$BUNDLE_ROOT/bin/_set_lockscreen_video.py" --restore ;;
+  lockscreen-status) /usr/bin/python3 "$BUNDLE_ROOT/bin/_set_lockscreen_video.py" --status ;;
+  fill)      cmd_fill "$@" ;;
+  battery)   cmd_battery "$@" ;;
+  lowpower)  cmd_lowpower "$@" ;;
+  powersave) cmd_powersave "$@" ;;
+  uninstall) cmd_uninstall ;;
+  enable)    cmd_enable ;;
+  disable)   cmd_disable ;;
+  ""|help|-h|--help) usage ;;
+  *) usage; exit 1 ;;
+esac
