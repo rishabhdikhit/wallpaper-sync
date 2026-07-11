@@ -1060,16 +1060,28 @@ class MainController: NSObject {
                 let alert = NSAlert()
                 let ok = (result.code == 0)
                 alert.messageText = ok ? "✓ \(title)" : "\(title) didn’t complete"
-                let lastLine = result.output
-                    .split(separator: "\n").map(String.init)
-                    .filter { !$0.isEmpty }.last ?? ""
                 alert.informativeText = ok ? successText
-                    : (lastLine.isEmpty ? "No active wallpaper to sync — set one first."
-                                        : lastLine.replacingOccurrences(of: "·· ", with: ""))
+                                           : Self.extractError(from: result.output)
                 alert.alertStyle = ok ? .informational : .warning
                 alert.runModal()
             }
         }
+    }
+
+    // Pull the CLI's `error:` message (plus its indented continuation lines) out
+    // of the combined output, ignoring interleaved `··` progress lines.
+    private static func extractError(from output: String) -> String {
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let start = lines.firstIndex(where: { $0.hasPrefix("error:") }) else {
+            return "No active wallpaper to sync — set one first."
+        }
+        var msg = [String(lines[start].dropFirst("error:".count)).trimmingCharacters(in: .whitespaces)]
+        var i = start + 1
+        while i < lines.count, lines[i].first == " " {
+            msg.append(lines[i].trimmingCharacters(in: .whitespaces))
+            i += 1
+        }
+        return msg.joined(separator: "\n")
     }
 
     @objc func uninstallFromSettings() {

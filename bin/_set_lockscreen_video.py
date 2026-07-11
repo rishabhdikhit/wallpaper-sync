@@ -173,38 +173,70 @@ def restart_wallpaper_agent():
 INDEX_PLIST = os.path.expanduser("~/Library/Application Support/com.apple.wallpaper/Store/Index.plist")
 
 
+AERIALS_APPEX = "WallpaperAerialsExtension.appex"
+
+
+def _choice_module(c):
+    """Return the screen-saver module path referenced by a choice, or ''."""
+    cfg = c.get('Configuration')
+    if isinstance(cfg, (bytes, bytearray)):
+        try:
+            return plistlib.loads(cfg).get('module', {}).get('relative', '')
+        except Exception:
+            return ''
+    return ''
+
+
 def configure_idle_plist(aerial_id):
-    """Write the selectedID into Index.plist so macOS knows which aerial to show on lock screen."""
+    """Point the lock screen (Idle) at our aerial. Returns True only if the lock
+    screen is ACTUALLY an aerial screen saver we can drive — otherwise the video
+    would be swapped into a slot nobody is displaying, so we report failure
+    instead of pretending it worked."""
     if not os.path.exists(INDEX_PLIST):
-        info("Index.plist not found, skipping configuration")
-        return
+        info("Index.plist not found")
+        return False
 
     try:
         with open(INDEX_PLIST, 'rb') as f:
             d = plistlib.load(f)
+    except Exception as e:
+        info(f"could not read Index.plist: {e}")
+        return False
 
-        config_data = plistlib.dumps({
-            'selectedID': aerial_id,
-            'showAsScreenSaver': True
-        })
+    matched = False
+    for section in ['AllSpacesAndDisplays', 'SystemDefault']:
+        idle = d.get(section, {}).get('Idle') if isinstance(d.get(section), dict) else None
+        if not idle:
+            continue
+        for c in idle.get('Content', {}).get('Choices', []):
+            prov = c.get('Provider', '')
+            if 'screen-saver' not in prov and 'sonoma' not in prov:
+                continue
+            module = _choice_module(c)
+            # Only drivable if the lock-screen screen saver IS the aerials
+            # module. If it's some other screen saver (e.g. Word of the Day),
+            # we can't make the video appear — bail truthfully.
+            if AERIALS_APPEX not in module:
+                continue
+            c['Configuration'] = plistlib.dumps({
+                'module': {'relative': module},
+                'selectedID': aerial_id,
+                'showAsScreenSaver': True,
+            })
+            matched = True
 
-        # Update AllSpacesAndDisplays.Idle
-        for section in ['AllSpacesAndDisplays', 'SystemDefault']:
-            if section in d and 'Idle' in d[section]:
-                choices = d[section]['Idle'].get('Content', {}).get('Choices', [])
-                for c in choices:
-                    if 'sonoma' in c.get('Provider', ''):
-                        c['Configuration'] = config_data
+    if not matched:
+        return False
 
+    try:
         with open(INDEX_PLIST, 'wb') as f:
             plistlib.dump(d, f)
-
-        # Force a timestamp change so macOS notices the file changed
         os.utime(INDEX_PLIST, None)
-
-        info(f"configured aerial {aerial_id} in Index.plist")
+        info(f"configured aerial {aerial_id} on the lock screen")
+        return True
     except Exception as e:
-        info(f"warning: could not update Index.plist: {e}")
+        info(f"could not write Index.plist: {e}")
+        return False
 
 
 def save_state(aerial_path, original_backup):
@@ -258,8 +290,19 @@ def cmd_install(video_path):
     info("copying video to the system slot…")
     atomic_copy(video_path, aerial_path)
 
-    # Ensure macOS Index.plist points to this aerial for the Idle (lock screen)
-    configure_idle_plist(aerial_id)
+    # Ensure macOS Index.plist points to this aerial for the Idle (lock screen).
+    # If the lock screen isn't an aerial screen saver, the swap is invisible —
+    # say so instead of falsely reporting success.
+    configured = configure_idle_plist(aerial_id)
+    if not configured:
+        save_state(aerial_path, backup_path)  # so the file swap can still be undone
+        die(
+            "your lock screen isn't set to an aerial, so the video can't appear there.\n"
+            "   Fix it once: System Settings → Wallpaper → pick an animated wallpaper\n"
+            "   (e.g. 'Sequoia Sunrise') and turn ON \"Show as screen saver\".\n"
+            "   Then run Sync to lock screen again."
+        )
+
     poster_ok = update_cold_boot_poster(video_path)
     restart_wallpaper_agent()
 
