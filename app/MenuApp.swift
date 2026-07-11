@@ -1037,15 +1037,38 @@ class MainController: NSObject {
 
     // Push the active wallpaper onto the lock screen.
     @objc func syncLockScreenFromSettings() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.runCommand("bin/wallpaper", args: ["lockscreen"])
-        }
+        settingsPopover?.performClose(nil)
+        runLockScreenCommand(["lockscreen"], title: "Sync to lock screen",
+                             successText: "The lock screen was updated. Lock your screen (⌃⌘Q) to see it.")
     }
 
     // Revert the lock screen to Apple's original aerial (undo the sync).
     @objc func restoreLockScreenFromSettings() {
+        settingsPopover?.performClose(nil)
+        runLockScreenCommand(["lockscreen-restore"], title: "Restore original lock screen",
+                             successText: "The lock screen was reverted to the original aerial.")
+    }
+
+    // Run a lock-screen CLI command and report the outcome, so the action isn't
+    // silent (the lock screen only changes what you see once you actually lock).
+    private func runLockScreenCommand(_ args: [String], title: String, successText: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.runCommand("bin/wallpaper", args: ["lockscreen-restore"])
+            guard let self = self else { return }
+            let result = self.runCommandResult("bin/wallpaper", args: args)
+            DispatchQueue.main.async {
+                NSApp.activate(ignoringOtherApps: true)
+                let alert = NSAlert()
+                let ok = (result.code == 0)
+                alert.messageText = ok ? "✓ \(title)" : "\(title) didn’t complete"
+                let lastLine = result.output
+                    .split(separator: "\n").map(String.init)
+                    .filter { !$0.isEmpty }.last ?? ""
+                alert.informativeText = ok ? successText
+                    : (lastLine.isEmpty ? "No active wallpaper to sync — set one first."
+                                        : lastLine.replacingOccurrences(of: "·· ", with: ""))
+                alert.alertStyle = ok ? .informational : .warning
+                alert.runModal()
+            }
         }
     }
 
@@ -1158,6 +1181,29 @@ class MainController: NSObject {
         process.environment = env
         do { try process.run(); process.waitUntilExit() }
         catch { print("Error: \(error)") }
+    }
+
+    // Like runCommand but captures the exit code and combined output, so
+    // callers can report success/failure to the user.
+    func runCommandResult(_ executable: String, args: [String]) -> (code: Int32, output: String) {
+        let process = Process()
+        process.executableURL = bundleResourcesURL.appendingPathComponent(executable)
+        process.arguments = args
+        var env = ProcessInfo.processInfo.environment
+        env["APP_BUNDLE_RESOURCES"] = bundleResourcesURL.path
+        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "")
+        process.environment = env
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+        } catch {
+            return (-1, error.localizedDescription)
+        }
     }
 }
 
