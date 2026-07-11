@@ -44,6 +44,9 @@ if pgrep -x WallpaperMenu >/dev/null; then pkill -x WallpaperMenu 2>/dev/null ||
 rm -rf "$DEST/MotionWall.app"
 cp -R "$APP_BUNDLE" "$DEST/MotionWall.app"
 codesign --force --deep --sign - "$DEST/MotionWall.app" 2>/dev/null || true
+# Drop the repo-local bundle so only the /Applications copy exists — otherwise
+# Spotlight/Launchpad index both and you get two identical app icons.
+rm -rf "$APP_BUNDLE"
 echo "·· installed to $DEST/MotionWall.app"
 
 chmod +x "$ROOT/bin/wallpaper"
