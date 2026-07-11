@@ -34,18 +34,17 @@ class ThumbCache {
 
     func get(_ path: String, size: NSSize, completion: @escaping (NSImage) -> Void) {
         if let img = cache[path] { completion(img); return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let url = URL(fileURLWithPath: path)
-            let asset = AVURLAsset(url: url)
-            let gen = AVAssetImageGenerator(asset: asset)
-            gen.appliesPreferredTrackTransform = true
-            gen.maximumSize = CGSize(width: size.width * 2, height: size.height * 2)
-            let time = CMTime(seconds: 1.0, preferredTimescale: 600)
-            if let cgImg = try? gen.copyCGImage(at: time, actualTime: nil) {
-                let img = NSImage(cgImage: cgImg, size: size)
-                self.cache[path] = img
-                DispatchQueue.main.async { completion(img) }
-            }
+        let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: size.width * 2, height: size.height * 2)
+        let time = CMTime(seconds: 1.0, preferredTimescale: 600)
+        // `gen` captured strongly so the request isn't cancelled when get() returns.
+        gen.generateCGImageAsynchronously(for: time) { [weak self, gen] cgImg, _, _ in
+            _ = gen
+            guard let cgImg = cgImg else { return }
+            let img = NSImage(cgImage: cgImg, size: size)
+            DispatchQueue.main.async { self?.cache[path] = img; completion(img) }
         }
     }
 }
@@ -564,7 +563,7 @@ class MainController: NSObject {
         let movFiles = files.filter { $0.hasSuffix(".mov") }.sorted()
 
         // Engine status — SF Symbol with semantic color
-        let engineRunning = (try? String(contentsOfFile: appSupportURL.appendingPathComponent("logs/engine.pid").path))
+        let engineRunning = (try? String(contentsOfFile: appSupportURL.appendingPathComponent("logs/engine.pid").path, encoding: .utf8))
             .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
             .map { kill(Int32($0), 0) == 0 } ?? false
         let symbolName = engineRunning ? "circle.fill" : "exclamationmark.circle.fill"
@@ -579,14 +578,23 @@ class MainController: NSObject {
         if !activeName.isEmpty {
             let vp = (libPath as NSString).appendingPathComponent(activeName + ".mov")
             if FileManager.default.fileExists(atPath: vp) {
-                DispatchQueue.global(qos: .utility).async { [weak self] in
+                Task { [weak self] in
                     let asset = AVURLAsset(url: URL(fileURLWithPath: vp))
-                    let tracks = asset.tracks(withMediaType: .video)
-                    let sz = tracks.first?.naturalSize ?? .zero
-                    let dur = CMTimeGetSeconds(asset.duration)
-                    let fs = (try? FileManager.default.attributesOfItem(atPath: vp)[.size] as? Int) ?? 0
-                    DispatchQueue.main.async {
-                        self?.activeInfoLabel.stringValue = "▶ \(self?.activeName ?? "")  ·  \(Int(sz.width))×\(Int(sz.height))  ·  HEVC  ·  \(fs/(1024*1024))MB  ·  \(Int(dur))s"
+                    var width = 0, height = 0, seconds = 0.0
+                    if let track = try? await asset.loadTracks(withMediaType: .video).first,
+                       let sz = try? await track.load(.naturalSize) {
+                        width = Int(sz.width); height = Int(sz.height)
+                    }
+                    if let d = try? await asset.load(.duration) {
+                        seconds = CMTimeGetSeconds(d)
+                    }
+                    let bytes = (try? FileManager.default.attributesOfItem(atPath: vp)[.size] as? Int) ?? 0
+                    // Finalize into an immutable string so the main-actor hop
+                    // captures no mutable state (Swift 6 concurrency clean).
+                    let info = "\(width)×\(height)  ·  HEVC  ·  \(bytes / (1024 * 1024))MB  ·  \(Int(seconds))s"
+                    await MainActor.run { [weak self] in
+                        guard let self = self else { return }
+                        self.activeInfoLabel.stringValue = "▶ \(self.activeName)  ·  " + info
                     }
                 }
             }
@@ -989,7 +997,7 @@ class MainController: NSObject {
     }
 
     private func engineIsRunning() -> Bool {
-        (try? String(contentsOfFile: appSupportURL.appendingPathComponent("logs/engine.pid").path))
+        (try? String(contentsOfFile: appSupportURL.appendingPathComponent("logs/engine.pid").path, encoding: .utf8))
             .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
             .map { kill(Int32($0), 0) == 0 } ?? false
     }
@@ -1314,7 +1322,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func togglePowerSaveMenu() {
         let cfgPath = mainController.appSupportURL.appendingPathComponent("config.json").path
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: cfgPath)),
-              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         
         let current = json["powerSavingMode"] as? Bool ?? false
         let newState = !current
