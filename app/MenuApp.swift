@@ -56,7 +56,9 @@ class WallpaperCard: NSView {
     let videoName: String
     var isActive: Bool = false { didSet { updateActiveState() } }
     var isHovered: Bool = false { didSet { updateHoverState() } }
-    var onClick: (() -> Void)?
+    var onClick: (() -> Void)?          // left-click = set on both surfaces
+    var onSetDesktop: (() -> Void)?
+    var onSetLock: (() -> Void)?
     var onDelete: (() -> Void)?
     var thumbHeight: CGFloat = Theme.thumbH
 
@@ -194,11 +196,24 @@ class WallpaperCard: NSView {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let m = NSMenu()
+        for (title, sel) in [
+            ("Set as Desktop + Lock Screen", #selector(setBoth)),
+            ("Set as Desktop only", #selector(setDesktopOnly)),
+            ("Set as Lock Screen only", #selector(setLockOnly)),
+        ] {
+            let item = NSMenuItem(title: title, action: sel, keyEquivalent: "")
+            item.target = self
+            m.addItem(item)
+        }
+        m.addItem(.separator())
         let del = NSMenuItem(title: "Delete \"\(videoName)\"", action: #selector(deleteItem), keyEquivalent: "")
         del.target = self
         m.addItem(del)
         return m
     }
+    @objc func setBoth() { onClick?() }
+    @objc func setDesktopOnly() { onSetDesktop?() }
+    @objc func setLockOnly() { onSetLock?() }
     @objc func deleteItem() { onDelete?() }
 }
 
@@ -586,6 +601,8 @@ class MainController: NSObject {
             let card = WallpaperCard(path: path, name: name)
             card.isActive = (name == activeName)
             card.onClick = { [weak self] in self?.useWallpaper(name) }
+            card.onSetDesktop = { [weak self] in self?.setDesktopWallpaper(name) }
+            card.onSetLock = { [weak self] in self?.setLockWallpaper(name) }
             card.onDelete = { [weak self] in self?.deleteWallpaper(name) }
             gridView.addSubview(card)
             gridView.cards.append(card)
@@ -834,7 +851,7 @@ class MainController: NSObject {
     }
 
     private let settingsW: CGFloat = 320
-    private let settingsH: CGFloat = 410
+    private let settingsH: CGFloat = 448
 
     private func buildSettingsPopover() -> NSPopover {
         let content = NSView(frame: NSRect(x: 0, y: 0, width: settingsW, height: settingsH))
@@ -865,18 +882,21 @@ class MainController: NSObject {
             control: powerSaveBtn, action: #selector(togglePowerSaveHUD),
             frame: NSRect(x: innerX, y: fromTop(232, 42), width: innerW, height: 42)))
 
-        content.addSubview(makeActionButton("Restore lock screen", symbol: "arrow.uturn.backward",
-            destructive: false, action: #selector(restoreLockScreenFromSettings),
+        content.addSubview(makeActionButton("Sync to lock screen", symbol: "arrow.triangle.2.circlepath",
+            destructive: false, action: #selector(syncLockScreenFromSettings),
             frame: NSRect(x: innerX, y: fromTop(286, 32), width: innerW, height: 32)))
+        content.addSubview(makeActionButton("Restore original lock screen", symbol: "arrow.uturn.backward",
+            destructive: false, action: #selector(restoreLockScreenFromSettings),
+            frame: NSRect(x: innerX, y: fromTop(326, 32), width: innerW, height: 32)))
         content.addSubview(makeActionButton("Uninstall MotionWall…", symbol: "trash",
             destructive: true, action: #selector(uninstallFromSettings),
-            frame: NSRect(x: innerX, y: fromTop(326, 32), width: innerW, height: 32)))
+            frame: NSRect(x: innerX, y: fromTop(366, 32), width: innerW, height: 32)))
 
         settingsStatusLabel.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
         settingsStatusLabel.textColor = Theme.textTer
         settingsStatusLabel.lineBreakMode = .byTruncatingTail
         settingsStatusLabel.maximumNumberOfLines = 2
-        settingsStatusLabel.frame = NSRect(x: innerX, y: fromTop(368, 28), width: innerW, height: 28)
+        settingsStatusLabel.frame = NSRect(x: innerX, y: fromTop(406, 28), width: innerW, height: 28)
         content.addSubview(settingsStatusLabel)
 
         let vc = NSViewController()
@@ -1007,6 +1027,14 @@ class MainController: NSObject {
         }
     }
 
+    // Push the active wallpaper onto the lock screen.
+    @objc func syncLockScreenFromSettings() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.runCommand("bin/wallpaper", args: ["lockscreen"])
+        }
+    }
+
+    // Revert the lock screen to Apple's original aerial (undo the sync).
     @objc func restoreLockScreenFromSettings() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.runCommand("bin/wallpaper", args: ["lockscreen-restore"])
@@ -1029,6 +1057,7 @@ class MainController: NSObject {
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
     }
 
+    // Left-click / "Both": desktop + lock screen.
     private func useWallpaper(_ name: String) {
         activeName = name
         gridView.cards.forEach { $0.isActive = ($0.videoName == name) }
@@ -1037,6 +1066,23 @@ class MainController: NSObject {
         }
         // Force refresh active info
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.reloadLibrary() }
+    }
+
+    // "Desktop only": animated desktop wallpaper, lock screen untouched.
+    private func setDesktopWallpaper(_ name: String) {
+        activeName = name
+        gridView.cards.forEach { $0.isActive = ($0.videoName == name) }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.runCommand("bin/wallpaper", args: ["desktop", name])
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.reloadLibrary() }
+    }
+
+    // "Lock Screen only": sync this video to the lock screen, desktop untouched.
+    private func setLockWallpaper(_ name: String) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.runCommand("bin/wallpaper", args: ["lockscreen", name])
+        }
     }
 
     @objc func togglePowerSaveHUD() {

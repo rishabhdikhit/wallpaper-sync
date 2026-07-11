@@ -117,7 +117,9 @@ is_running() {
   ps -p "$p" -o comm= 2>/dev/null | grep -q "WallpaperEngine$" || { rm -f "$PID"; return 1; }
 }
 
-cmd_start() {
+# Launch the engine without touching the lock screen. Used by the desktop-only
+# path so choosing a desktop wallpaper doesn't also rewrite the lock screen.
+start_engine_only() {
   ensure_cfg
   [ -x "$APP" ] || die "binary not found: $APP"
   local vid; vid="$(cfg_get video)"
@@ -128,11 +130,14 @@ cmd_start() {
   sleep 0.3
   is_running || die "failed to start (see $LOG)"
   info "started (pid $(cat "$PID"))"
+}
 
+cmd_start() {
+  start_engine_only
   # Resync the lock screen slot to the current video. Without this, after a
   # reboot the system keeps showing the last video that was synced manually
   # (with `wallpaper use` or `set`), not the active one.
-  sync_lockscreen "$vid"
+  sync_lockscreen "$(cfg_get video)"
 }
 
 cmd_stop() {
@@ -184,30 +189,38 @@ cmd_add() {
   info "added: $stem"
 }
 
+# Resolve a library name to its .mov path (or die).
+resolve_lib() {
+  local name="$1"
+  local match="$LIB/${name}.mov"
+  [ -f "$match" ] || die "not in the library: $name (see 'wallpaper list')"
+  echo "$match"
+}
+
+# Desktop only: set the animated desktop wallpaper, leave the lock screen alone.
+cmd_desktop() {
+  ensure_cfg
+  local name="${1:-}"; [ -n "$name" ] || die "usage: wallpaper desktop <name>"
+  local match; match="$(resolve_lib "$name")" || exit 1
+
+  # The running engine picks up the config change automatically via checkConfig.
+  cfg_set video "$match"
+  cfg_set activeName "$name"
+  info "desktop wallpaper: $name"
+  is_running || start_engine_only
+}
+
+# Both: desktop wallpaper AND lock screen.
 cmd_use() {
   ensure_cfg
   local name="${1:-}"; [ -n "$name" ] || die "usage: wallpaper use <name>"
+  local match; match="$(resolve_lib "$name")" || exit 1
 
-  # Find the .mov in the library
-  local match=""
-  for f in "$LIB/${name}.mov"; do
-    [ -f "$f" ] && { match="$f"; break; }
-  done
-  [ -n "$match" ] || die "not in the library: $name (see 'wallpaper list')"
-
-  # Update config — the engine detects it automatically via checkConfig
   cfg_set video "$match"
   cfg_set activeName "$name"
-
-  # Sync lock screen (atomic copy, already HEVC)
   sync_lockscreen "$match"
-
   info "active wallpaper: $name"
-
-  # If the engine isn't running, start it
-  if ! is_running; then
-    cmd_start
-  fi
+  is_running || start_engine_only
 }
 
 cmd_set() {
@@ -360,9 +373,17 @@ cmd_uninstall() {
 
 cmd_logs() { tail -n "${1:-80}" "$LOG" 2>/dev/null || echo "(no logs)"; }
 
+# Lock screen only. With a name, sync that library video to the lock screen
+# without changing the desktop wallpaper; with no name, sync the active one.
 cmd_lockscreen() {
-  local vid; vid="$(cfg_get video)"
-  [ -n "$vid" ] && [ -f "$vid" ] || die "no active wallpaper"
+  ensure_cfg
+  local name="${1:-}" vid
+  if [ -n "$name" ]; then
+    vid="$(resolve_lib "$name")" || exit 1
+  else
+    vid="$(cfg_get video)"
+    [ -n "$vid" ] && [ -f "$vid" ] || die "no active wallpaper"
+  fi
   /usr/bin/python3 "$BUNDLE_ROOT/bin/_set_lockscreen_video.py" "$vid"
 }
 
@@ -382,8 +403,10 @@ usage() {
 wallpaper — animated wallpaper engine for macOS
 
 USAGE:
-  wallpaper set <file>          Convert to HEVC and set as wallpaper
-  wallpaper use <name>          Activate a wallpaper from the library (instant)
+  wallpaper set <file>          Convert to HEVC and set as wallpaper (both)
+  wallpaper use <name>          Activate on desktop AND lock screen (instant)
+  wallpaper desktop <name>      Activate on the desktop only
+  wallpaper lockscreen [name]   Set the lock screen only (active if no name)
   wallpaper add <file>          Add to the library without activating
   wallpaper list                List the library (▶ = active)
   wallpaper remove <name>       Remove from the library
@@ -408,6 +431,7 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
   set)       cmd_set "$@" ;;
   use)       cmd_use "$@" ;;
+  desktop)   cmd_desktop "$@" ;;
   add)       cmd_add "$@" ;;
   list|ls)   cmd_list ;;
   remove|rm) cmd_remove "$@" ;;
