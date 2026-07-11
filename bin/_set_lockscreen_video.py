@@ -50,6 +50,32 @@ def find_downloaded_aerials():
     return results
 
 
+def find_active_aerial():
+    """The aerial macOS is actually playing is held open by WallpaperAgent /
+    WallpaperAerial. Swapping THAT file is what shows on the lock screen — the
+    first file in the directory is usually a different, idle aerial. Returns the
+    open aerial's path, or None if it can't be determined."""
+    pids = []
+    for pat in ("WallpaperAgent", "WallpaperAerial"):
+        r = subprocess.run(["pgrep", "-f", pat], capture_output=True, text=True)
+        pids += [p for p in r.stdout.split() if p]
+    if not pids:
+        return None
+    try:
+        r = subprocess.run(["lsof", "-p", ",".join(sorted(set(pids))), "-Fn"],
+                           capture_output=True, text=True, timeout=10)
+    except Exception:
+        return None
+    for line in r.stdout.splitlines():
+        # lsof -F prefixes name lines with 'n'
+        if line.startswith("n") and "/aerials/videos/" in line \
+           and line.endswith(".mov") and BACKUP_SUFFIX not in line:
+            path = line[1:]
+            if os.path.exists(path):
+                return path
+    return None
+
+
 def get_aerial_id_from_path(path):
     return os.path.splitext(os.path.basename(path))[0]
 
@@ -239,8 +265,10 @@ def cmd_install(video_path):
 
     manifest = load_manifest()
 
-    # Use the first available aerial
-    aerial_path = aerials[0]
+    # Swap the aerial macOS is ACTUALLY playing (held open by WallpaperAgent),
+    # not just the first one on disk — otherwise the video lands in an idle slot
+    # nobody sees. Fall back to the first aerial if we can't detect the active one.
+    aerial_path = find_active_aerial() or aerials[0]
     aerial_id = get_aerial_id_from_path(aerial_path)
     aerial_name = manifest.get(aerial_id, {}).get("accessibilityLabel", aerial_id)
 
