@@ -12,16 +12,13 @@ import UniformTypeIdentifiers
 // in chrome.
 struct Theme {
     static var accent: NSColor    { NSColor.controlAccentColor }
-    static var accent2: NSColor   { NSColor.systemPink }
     static var cardBg: NSColor    { NSColor(name: nil) { $0.name == .darkAqua ? NSColor(white: 1, alpha: 0.06) : NSColor(white: 0, alpha: 0.04) } }
     static var cardHover: NSColor { NSColor(name: nil) { $0.name == .darkAqua ? NSColor(white: 1, alpha: 0.10) : NSColor(white: 0, alpha: 0.07) } }
-    static var cardBorder: NSColor { NSColor.separatorColor }
     static var textPri: NSColor   { NSColor.labelColor }
     static var textSec: NSColor   { NSColor.secondaryLabelColor }
     static var textTer: NSColor   { NSColor.tertiaryLabelColor }
     static let cardRadius: CGFloat = 16
     static let cardW: CGFloat = 240
-    static let cardH: CGFloat = 175
     static let thumbH: CGFloat = 145
     static let gap: CGFloat = 18
     static let pad: CGFloat = 28
@@ -563,9 +560,7 @@ class MainController: NSObject {
         let movFiles = files.filter { $0.hasSuffix(".mov") }.sorted()
 
         // Engine status — SF Symbol with semantic color
-        let engineRunning = (try? String(contentsOfFile: appSupportURL.appendingPathComponent("logs/engine.pid").path, encoding: .utf8))
-            .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-            .map { kill(Int32($0), 0) == 0 } ?? false
+        let engineRunning = engineIsRunning()
         let symbolName = engineRunning ? "circle.fill" : "exclamationmark.circle.fill"
         if let img = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) {
             let cfg = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
