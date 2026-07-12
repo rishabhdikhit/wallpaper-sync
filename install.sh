@@ -16,9 +16,11 @@ echo "·· compiling WallpaperMenu (HUD)…"
   -o "$ROOT/app/WallpaperMenu" "$ROOT/app/MenuApp.swift"
 
 # ── Assemble the .app (created from scratch if it doesn't exist) ───────
-# Remove the pre-rename bundle so we don't leave a stale "Wallpaper Sync.app".
-rm -rf "$ROOT/Wallpaper Sync.app"
-APP_BUNDLE="$ROOT/MotionWall.app"
+# Remove stale bundles from earlier names so they don't linger in Launchpad.
+rm -rf "$ROOT/Wallpaper Sync.app" "$ROOT/MotionWall.app" \
+       "/Applications/Wallpaper Sync.app" "/Applications/MotionWall.app" \
+       "$HOME/Applications/Wallpaper Sync.app" "$HOME/Applications/MotionWall.app"
+APP_BUNDLE="$ROOT/Wally.app"
 echo "·· assembling ${APP_BUNDLE}…"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" \
          "$APP_BUNDLE/Contents/Resources/app" \
@@ -41,13 +43,13 @@ codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
 # Falls back to ~/Applications if /Applications isn't writable.
 if [ -w /Applications ]; then DEST="/Applications"; else DEST="$HOME/Applications"; mkdir -p "$DEST"; fi
 if pgrep -x WallpaperMenu >/dev/null; then pkill -x WallpaperMenu 2>/dev/null || true; sleep 0.5; fi
-rm -rf "$DEST/MotionWall.app"
-cp -R "$APP_BUNDLE" "$DEST/MotionWall.app"
-codesign --force --deep --sign - "$DEST/MotionWall.app" 2>/dev/null || true
+rm -rf "$DEST/Wally.app"
+cp -R "$APP_BUNDLE" "$DEST/Wally.app"
+codesign --force --deep --sign - "$DEST/Wally.app" 2>/dev/null || true
 # Drop the repo-local bundle so only the /Applications copy exists — otherwise
 # Spotlight/Launchpad index both and you get two identical app icons.
 rm -rf "$APP_BUNDLE"
-echo "·· installed to $DEST/MotionWall.app"
+echo "·· installed to $DEST/Wally.app"
 
 chmod +x "$ROOT/bin/wallpaper"
 

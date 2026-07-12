@@ -317,7 +317,7 @@ class MainController: NSObject {
                           backing: .buffered, defer: false)
         super.init()
 
-        window.title = "MotionWall"
+        window.title = "Wally"
         // Min width 760 leaves room for traffic lights + title + search +
         // right-side controls without overlap. Below that we hide the search
         // field dynamically.
@@ -462,7 +462,7 @@ class MainController: NSObject {
         bottomBar.addSubview(activeInfoLabel)
 
         // Placeholder note — far right of the bottom bar. Anchored right via .minXMargin.
-        let comingSoon = NSTextField(labelWithString: "MotionWall")
+        let comingSoon = NSTextField(labelWithString: "Wally")
         comingSoon.font = NSFont.systemFont(ofSize: 11, weight: .regular)
         comingSoon.textColor = Theme.textTer
         comingSoon.alignment = .right
@@ -868,7 +868,7 @@ class MainController: NSObject {
         func fromTop(_ top: CGFloat, _ h: CGFloat) -> CGFloat { settingsH - top - h }
 
         content.addSubview(makeSectionHeader("STARTUP", frame: NSRect(x: innerX, y: fromTop(16, 16), width: innerW, height: 16)))
-        content.addSubview(makeSwitchRow("Launch at login", "Open MotionWall automatically",
+        content.addSubview(makeSwitchRow("Launch at login", "Open Wally automatically",
             control: loginSwitch, action: #selector(toggleLoginItem),
             frame: NSRect(x: innerX, y: fromTop(38, 42), width: innerW, height: 42)))
 
@@ -891,7 +891,7 @@ class MainController: NSObject {
         content.addSubview(makeActionButton("Restore original lock screen", symbol: "arrow.uturn.backward",
             destructive: false, action: #selector(restoreLockScreenFromSettings),
             frame: NSRect(x: innerX, y: fromTop(326, 32), width: innerW, height: 32)))
-        content.addSubview(makeActionButton("Uninstall MotionWall…", symbol: "trash",
+        content.addSubview(makeActionButton("Uninstall Wally…", symbol: "trash",
             destructive: true, action: #selector(uninstallFromSettings),
             frame: NSRect(x: innerX, y: fromTop(366, 32), width: innerW, height: 32)))
 
@@ -1086,7 +1086,7 @@ class MainController: NSObject {
 
     @objc func showMoreMenu(_ sender: NSButton) {
         let menu = NSMenu()
-        let uninstall = NSMenuItem(title: "Uninstall MotionWall…",
+        let uninstall = NSMenuItem(title: "Uninstall Wally…",
                                    action: #selector(AppDelegate.uninstallApp), keyEquivalent: "")
         uninstall.target = NSApp.delegate
         menu.addItem(uninstall)
@@ -1227,7 +1227,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let btn = statusItem.button {
             if #available(macOS 11.0, *),
-               let img = NSImage(systemSymbolName: "play.square.stack.fill", accessibilityDescription: "MotionWall") {
+               let img = NSImage(systemSymbolName: "play.square.stack.fill", accessibilityDescription: "Wally") {
                 let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
                 let configured = img.withSymbolConfiguration(cfg) ?? img
                 configured.isTemplate = true
@@ -1271,7 +1271,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // ffmpeg not found — ask to install
         let alert = NSAlert()
         alert.messageText = "ffmpeg required"
-        alert.informativeText = "Wallpaper Sync needs ffmpeg to convert videos.\n\nWould you like it installed automatically?"
+        alert.informativeText = "Wally needs ffmpeg to convert videos.\n\nWould you like it installed automatically?"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Install ffmpeg")
         alert.addButton(withTitle: "Later")
@@ -1393,7 +1393,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
-        alert.messageText = "Uninstall MotionWall?"
+        alert.messageText = "Uninstall Wally?"
         alert.informativeText = """
         This will:
           1. Stop the wallpaper engine
